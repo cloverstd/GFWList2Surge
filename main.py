@@ -6,7 +6,8 @@ import urlparse
 import logging
 import urllib2
 from argparse import ArgumentParser
-import sys
+import json
+from collections import defaultdict
 
 __all__ = ['main']
 
@@ -33,6 +34,8 @@ def parse_args():
     parser.add_argument('--surge-proxy', dest='surge_proxy', required=True,
                         nargs='+',
                         help='Surge Proxy conf')
+    parser.add_argument('--apple-dns', dest='apple_dns', required=False,
+                        help='AppleDNS ref https://github.com/gongjianhui/AppleDNS')
     parser.add_argument('--all-tcp-mode', dest='all_tcp_mode', required=False,
                         help='all-tcp-mode defalut false')
     parser.add_argument('-l', '--loglevel', dest='loglevel', required=False,
@@ -154,6 +157,16 @@ def generate_surge(domains, proxy_name, surge_proxy):
             "Proxy = select, {}".format(", ".join(map(lambda x: x.decode('utf-8'), proxy_name))))
     return surge_conf_content.encode('utf-8')
 
+def find_fast_ip(ips):
+    table = defaultdict(list)
+    for item in sum(ips.values(), []):
+        table[item['ip']].append(item['delta'])
+    table = map(
+        lambda item: (item[0], sum(item[1]) / len(item[1])),
+        table.items()
+    )
+    ip, rt = sorted(table, key=lambda item: item[1])[0]
+    return ip
 
 def main():
     args = parse_args()
@@ -188,6 +201,22 @@ def main():
     all_tcp_mode = args.all_tcp_mode if args.all_tcp_mode == 'true'\
             else 'false'
     surge_conf_content = surge_conf_content.replace('__ALL_TCP_MODE__', all_tcp_mode)
+
+    if args.apple_dns:
+        res = list()
+        with open(args.apple_dns, 'rb') as f:
+            payload = json.load(f)
+            for service in sorted(payload, key=lambda item: item['title']):
+                fast_ip = find_fast_ip(service['ips'])
+                res.append(('# %(title)s' % service).encode('utf8', 'ignore'))
+                for domain in sorted(service['domains'], key=len):
+                    template = '%s'
+                    if not fast_ip:
+                        template = '# %s'
+                    res.append(template % '{domain} = {ip}'.format(domain=domain, ip=fast_ip))
+        surge_conf_content = surge_conf_content.replace('__APPLE_DNS__', "\n".join(map(lambda x: x.decode('utf-8'), res)))
+    else:
+        surge_conf_content = surge_conf_content.replace('__APPLE_DNS__', "\n")
 
     with open(args.output, 'wb') as f:
         f.write(surge_conf_content.encode('utf-8'))
