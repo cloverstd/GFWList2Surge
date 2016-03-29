@@ -6,6 +6,7 @@ import urlparse
 import logging
 import urllib2
 from argparse import ArgumentParser
+import sys
 
 __all__ = ['main']
 
@@ -27,8 +28,10 @@ def parse_args():
                         help='user rule file, which will be appended to'
                              ' gfwlist')
     parser.add_argument('--surge-proxy-name', dest='proxy_name', required=True,
+                        nargs='+',
                         help='Surge Proxy name')
     parser.add_argument('--surge-proxy', dest='surge_proxy', required=True,
+                        nargs='+',
                         help='Surge Proxy conf')
     parser.add_argument('--all-tcp-mode', dest='all_tcp_mode', required=False,
                         help='all-tcp-mode defalut false')
@@ -129,19 +132,26 @@ def reduce_domains(domains):
 
 def generate_surge(domains, proxy_name, surge_proxy):
     # render the surge.conf file
+    if len(proxy_name) != len(surge_proxy):
+        raise Exception()
     surge_conf_content = get_data_from_file('resources/surge.conf')
     rule = list()
     rule_tpl = "DOMAIN-SUFFIX,{domain},{proxy_name}"
     for domain in domains:
         rule.append(rule_tpl.format(
                 domain=domain,
-                proxy_name=proxy_name.decode('utf-8')
+                proxy_name=proxy_name[0].decode('utf-8')
             )
         )
+    proxy = list()
+    for i in xrange(len(surge_proxy)):
+        proxy.append('{} = {}'.format(proxy_name[i].decode('utf-8'), surge_proxy[i]))
     surge_conf_content = surge_conf_content.replace('__RULE__',
             "\n".join(rule))
     surge_conf_content = surge_conf_content.replace('__PROXY__',
-            surge_proxy)
+            "\n".join(proxy))
+    surge_conf_content = surge_conf_content.replace('__PROXY_GROUP__',
+            "Proxy = select, {}".format(", ".join(map(lambda x: x.decode('utf-8'), proxy_name))))
     return surge_conf_content.encode('utf-8')
 
 
@@ -172,6 +182,7 @@ def main():
     surge_conf_content = generate_surge(domains, args.proxy_name, args.surge_proxy)
 
     loglevel = args.loglevel if args.loglevel else 'notify'
+    surge_conf_content = surge_conf_content.decode('utf-8')
     surge_conf_content = surge_conf_content.replace('__LOGLEVEL__', loglevel)
 
     all_tcp_mode = args.all_tcp_mode if args.all_tcp_mode == 'true'\
@@ -179,7 +190,7 @@ def main():
     surge_conf_content = surge_conf_content.replace('__ALL_TCP_MODE__', all_tcp_mode)
 
     with open(args.output, 'wb') as f:
-        f.write(surge_conf_content)
+        f.write(surge_conf_content.encode('utf-8'))
 
 
 if __name__ == '__main__':
