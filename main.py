@@ -7,7 +7,8 @@ import logging
 import urllib2
 from argparse import ArgumentParser
 import json
-from collections import defaultdict
+from collections import namedtuple
+from operator import attrgetter
 
 __all__ = ['main']
 
@@ -157,16 +158,27 @@ def generate_surge(domains, proxy_name, surge_proxy):
             "Proxy = select, {}".format(", ".join(map(lambda x: x.decode('utf-8'), proxy_name))))
     return surge_conf_content.encode('utf-8')
 
-def find_fast_ip(ips):
-    table = defaultdict(list)
-    for item in sum(ips.values(), []):
-        table[item['ip']].append(item['delta'])
-    table = map(
-        lambda item: (item[0], sum(item[1]) / len(item[1])),
-        table.items()
-    )
-    ip, rt = sorted(table, key=lambda item: item[1])[0]
-    return ip
+def find_fast_ip(ipset):
+    Item = namedtuple('Item', ['tag', 'ip', 'avg_rtt'])
+
+    def handle_delta(items):
+        tag, delta_map = items
+
+        def handle(item):
+            ip, delta = item
+            delta = list(item for item in delta if item != None)
+            if delta:
+                return Item(tag, ip, sum(delta) / float(len(delta)))
+            return Item(tag, ip, float('NaN'))
+
+        return list(map(handle, delta_map.items()))
+
+    def handle_sorted():
+        data = sum(list(map(handle_delta, ipset.items())), [])
+        return sorted(data, key=attrgetter('avg_rtt'))
+
+    iptable = handle_sorted()
+    return iptable[0] if iptable else None
 
 def main():
     args = parse_args()
@@ -207,13 +219,13 @@ def main():
         with open(args.apple_dns, 'rb') as f:
             payload = json.load(f)
             for service in sorted(payload, key=lambda item: item['title']):
-                fast_ip = find_fast_ip(service['ips'])
-                res.append(('# %(title)s' % service).encode('utf8', 'ignore'))
+                tag, ip, avg_rtt = find_fast_ip(service['ips'])
+                if not avg_rtt:
+                    continue
+                res.append(('# %s [%s] (Avg RTT: %.3fms)' % (service['title'], tag, avg_rtt)).encode('utf8', 'ignore'))
                 for domain in sorted(service['domains'], key=len):
-                    template = '%s'
-                    if not fast_ip:
-                        template = '# %s'
-                    res.append(template % '{domain} = {ip}'.format(domain=domain, ip=fast_ip))
+                    template = '%s' if ip else '# %s'
+                    res.append(template % '{domain} = {ip}'.format(domain=domain, ip=ip))
         surge_conf_content = surge_conf_content.replace('__APPLE_DNS__', "\n".join(map(lambda x: x.decode('utf-8'), res)))
     else:
         surge_conf_content = surge_conf_content.replace('__APPLE_DNS__', "\n")
